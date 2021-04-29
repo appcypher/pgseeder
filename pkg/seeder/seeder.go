@@ -106,7 +106,7 @@ func (seeder *Seeder) AddAll() error {
 		return err
 	}
 
-	files, err := getAllFiles(seeder.dir)
+	files, err := seeder.getAllFiles()
 	if err != nil {
 		return err
 	}

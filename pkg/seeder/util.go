@@ -59,10 +59,10 @@ func (seeder *Seeder) getSeedTableNames() (map[string]struct{}, error) {
 }
 
 // getAllFiles gets all files in a directory
-func getAllFiles(dir string) ([]string, error) {
+func (seeder *Seeder) getAllFiles() ([]string, error) {
 	var files []string
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(seeder.dir, func(path string, info os.FileInfo, err error) error {
 		files = append(files, path)
 		return nil
 	})
