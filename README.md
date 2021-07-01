@@ -31,7 +31,7 @@ A seeder for adding and removing seeds from a Postgres database.
   ```sh
   pgseeder -c "postgres://postgres@localhost:5432/resourcedb" --add users
   ```
-  
+
   The `-c` is needed to connect to the database. It takes postgres connection string.
 
 - You can also run all the `.sql` files in the current directory with the `--add-all` flag
@@ -88,3 +88,8 @@ A seeder for adding and removing seeds from a Postgres database.
 - Only supports `.sql` files.
 
 - Does not support seeding multiple tables in a single `.sql` file.
+
+## TODO
+
+- [ ] Fix order issue for `add all` and `remove all`. Using a solution similar to migration files.
+- [ ] Fix composite key issue
