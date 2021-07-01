@@ -12,53 +12,66 @@ import (
 // Seeder represents a seeder instance.
 type Seeder struct {
 	*pg.DB
-	dir   string
-	files []string
+	dir          string
+	files        []string
+	seedKeyNames []string
+	SeedKeyType  SeedKeyType
 }
 
-const pgseederTable = "pgseeder_seeds"
-
 // NewSeeder creates a new seeder.
-func NewSeeder(dir string, connectionURI string) (Seeder, error) {
+func NewSeeder(dir string, connectionURI string, seedKeyNames []string, seedKeyIntegerType bool, verbose bool) (Seeder, error) {
 	opts, err := pg.ParseURL(connectionURI)
 	if err != nil {
 		return Seeder{}, err
 	}
 
+	// If seedKeyNames is empty, use "id" as default primary key.
+	newSeedKeyNames := seedKeyNames
+	if len(seedKeyNames) == 0 {
+		newSeedKeyNames = []string{"id"}
+	}
+
+	// seedKeyType is string unless specified otherwise.
+	seedKeyType := SeedKeyTypeString
+	if seedKeyIntegerType {
+		seedKeyType = SeedKeyTypeInteger
+	}
+
 	db := pg.Connect(opts)
 
+	if verbose {
+		db.AddQueryHook(queryPrinter{})
+	}
+
 	return Seeder{
-		dir: dir,
-		DB:  db,
+		dir:          dir,
+		DB:           db,
+		seedKeyNames: newSeedKeyNames,
+		SeedKeyType:  seedKeyType,
 	}, nil
 }
 
 // Add adds seed data for a table to the DB.
 func (seeder *Seeder) Add(tableName string) error {
-	var err error
-
 	// Creates seeds table if one does not exist.
-	if err = seeder.createSeedsTable(); err != nil {
+	if err := createSeedsTable(seeder.DB); err != nil {
 		return err
 	}
 
 	// Get sql file content.
 	path := filepath.Join(seeder.dir, tableName+".sql")
-	query, err := ioutil.ReadFile(path)
+	queries, err := ioutil.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	queryStr := string(query)
-
-	// Run sql queries.
-	_, err = seeder.Exec(queryStr)
-	if err != nil {
-		return err
-	}
+	queriesStr := string(queries)
 
 	// Create inserts from query string.
-	inserts := generateInsertsFromQuery(queryStr, "id")
+	inserts, err := generateInsertsFromQueries(queriesStr, seeder.seedKeyNames, seeder.SeedKeyType)
+	if err != nil {
+		return err
+	}
 
 	// Insert values in pgseeder_seeds table
 	_, err = seeder.Model(&inserts).Insert()
@@ -66,47 +79,71 @@ func (seeder *Seeder) Add(tableName string) error {
 		return err
 	}
 
-	fmt.Printf("%v\tOK - %v added\n", formatDate(time.Now()), tableName)
+	if err := seeder.RunInTransaction(seeder.Context(), func(tx *pg.Tx) error {
+		// Run sql queries.
+		_, err = tx.Exec(queriesStr)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("%v\tOK - %v seeds added\n", formatDate(time.Now()), tableName)
 
 	return nil
 }
 
 // Remove removes seed data for a table in the DB.
 func (seeder *Seeder) Remove(tableName string) error {
-	// tableNames, err := seeder.getSeedTableNames()
-	// if err != nil {
-	// 	return err
-	// }
+	// Creates seeds table if one does not exist.
+	if err := createSeedsTable(seeder.DB); err != nil {
+		return err
+	}
 
-	// Check if table exists.
-	// if _, ok := tableNames[tableName]; ok {
-	// 	fmt.Println("table: ", tableName)
+	if err := seeder.RunInTransaction(seeder.Context(), func(tx *pg.Tx) error {
+		var seeds []PgseederSeed
 
-	// 	// Delete seeds in a specified table.
-	// 	// Sec: TODO: Need to remove concat. Gorm currently doesn't handle table name escaping well.
-	// 	seeder.DB.Exec(
-	// 		"DELETE FROM "+tableName+" WHERE id IN (SELECT seed_id FROM seeds WHERE table_name = ?)",
-	// 		tableName,
-	// 	)
+		// Get all seeds associated with specified table from pgseeder_seeds.
+		getSeedRecordsQuery := `SELECT seed_keys FROM pgseeder_seeds WHERE table_name = ?;`
+		if _, err := tx.Query(&seeds, getSeedRecordsQuery, tableName); err != nil {
+			return err
+		}
 
-	// 	// Delete rows associated with a specified table in seeds table.
-	// 	seeder.DB.Exec("DELETE FROM seeds WHERE table_name = ?", tableName)
+		// Delete seeds from specified table.
+		for _, seed := range seeds {
+			deleteSeedQuery := constructDeleteSeedQuery(seed)
+			if _, err := tx.Exec(deleteSeedQuery, pg.Ident(tableName)); err != nil {
+				return err
+			}
+		}
 
-	// }
+		// Delete seed information from pgseeder_seeds table.
+		deleteSeedRecordsQuery := `DELETE FROM pgseeder_seeds WHERE table_name = ?;`
+		if _, err := tx.Query(&seeds, deleteSeedRecordsQuery, tableName); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("%v\tOK - %v seeds removed\n", formatDate(time.Now()), tableName)
 
 	return nil
 }
 
 // AddAll adds all seed data to the DB.
 func (seeder *Seeder) AddAll() error {
-	var err error
-
 	// Creates seeds table if one does not exist.
-	if err = seeder.createSeedsTable(); err != nil {
+	if err := createSeedsTable(seeder.DB); err != nil {
 		return err
 	}
 
-	files, err := seeder.getAllFiles()
+	files, err := getAllSQLFilesWithoutExt(seeder.dir)
 	if err != nil {
 		return err
 	}
@@ -120,22 +157,19 @@ func (seeder *Seeder) AddAll() error {
 
 // RemoveAll removes all seed data in the DB.
 func (seeder *Seeder) RemoveAll() error {
-	_, err := seeder.getSeedTableNames()
+	// Creates seeds table if one does not exist.
+	if err := createSeedsTable(seeder.DB); err != nil {
+		return err
+	}
+
+	seeds, err := getSeedsByDistinctTableNames(seeder.DB)
 	if err != nil {
 		return err
 	}
 
-	// for tableName := range tableNames {
-	// 	// Delete seeds in a specified table.
-	// 	// Sec: TODO: Need to remove concat. Gorm currently doesn't handle table name escaping well.
-	// 	seeder.DB.Exec(
-	// 		"DELETE FROM "+tableName+" WHERE id IN (SELECT seed_id FROM seeds WHERE table_name = ?)",
-	// 		tableName,
-	// 	)
-
-	// 	// Delete rows associated with a specified table in seeds table.
-	// 	seeder.DB.Exec("DELETE FROM seeds WHERE table_name = ?", tableName)
-	// }
+	for _, seed := range seeds {
+		seeder.Remove(seed.TableName)
+	}
 
 	return nil
 }

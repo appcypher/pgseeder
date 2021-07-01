@@ -21,13 +21,15 @@ Build the binary.
 go build cmd/pgseeder.go
 ```
 
-Add the binary to system path and run `pgseeder` command in a directory with seeds or specify with seed directory with `--dir` flag
+Add the binary to system path and run `pgseeder` command in a directory with seeds or specify with seed directory with `-d` flag
 
 ```sh
 pgseeder -c "postgres://appcypher@localhost:5432/resourcedb?sslmode=disable" --add users
 pgseeder -c "postgres://appcypher@localhost:5432/resourcedb?sslmode=disable" --remove users
 pgseeder -c "postgres://appcypher@localhost:5432/resourcedb?sslmode=disable" --add-all -d internal/db/seeds/resource
 pgseeder -c "postgres://appcypher@localhost:5432/resourcedb?sslmode=disable" --remove-all
+pgseeder -c "postgres://appcypher@localhost:5432/resourcedb?sslmode=disable" --add users -i
+pgseeder -c "postgres://appcypher@localhost:5432/resourcedb?sslmode=disable" --add users -k "user_id, workspace_id"
 ```
 
 ### LIMITATIONS
