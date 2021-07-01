@@ -87,4 +87,4 @@ A seeder for adding and removing seeds from a Postgres database.
 
 - Only supports `.sql` files.
 
-- Does not support seeding multiple tables in a single `.sql` files
+- Does not support seeding multiple tables in a single `.sql` file.
