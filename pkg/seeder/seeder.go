@@ -3,7 +3,8 @@ package seeder
 import (
 	"fmt"
 	"io/ioutil"
-	"path/filepath"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/go-pg/pg/v10"
@@ -19,8 +20,8 @@ type Seeder struct {
 }
 
 // NewSeeder creates a new seeder.
-func NewSeeder(dir string, connectionURI string, seedKeyNames []string, seedKeyIntegerType bool, verbose bool) (Seeder, error) {
-	opts, err := pg.ParseURL(connectionURI)
+func NewSeeder(seedKeyNames []string, flags *Flags) (Seeder, error) {
+	opts, err := pg.ParseURL(flags.ConnectionURI)
 	if err != nil {
 		return Seeder{}, err
 	}
@@ -33,18 +34,18 @@ func NewSeeder(dir string, connectionURI string, seedKeyNames []string, seedKeyI
 
 	// seedKeyType is string unless specified otherwise.
 	seedKeyType := SeedKeyTypeString
-	if seedKeyIntegerType {
+	if flags.SeedKeyIntegerType {
 		seedKeyType = SeedKeyTypeInteger
 	}
 
 	db := pg.Connect(opts)
 
-	if verbose {
+	if flags.Verbose {
 		db.AddQueryHook(queryPrinter{})
 	}
 
 	return Seeder{
-		dir:          dir,
+		dir:          flags.Directory,
 		DB:           db,
 		seedKeyNames: newSeedKeyNames,
 		SeedKeyType:  seedKeyType,
@@ -52,15 +53,34 @@ func NewSeeder(dir string, connectionURI string, seedKeyNames []string, seedKeyI
 }
 
 // Add adds seed data for a table to the DB.
-func (seeder *Seeder) Add(tableName string) error {
+func (seeder *Seeder) Add(filename string, tableName string) error {
 	// Creates seeds table if one does not exist.
 	if err := createSeedsTable(seeder.DB); err != nil {
 		return err
 	}
 
+	tableOrder := 0
+
+	// Check for patterns in filename and capture aspects of it.
+	pattern, err := regexp.Compile("^(?:(\\d+)_?)?(.+)\\.sql$")
+	if err != nil {
+		return err
+	}
+	capturedMatches := pattern.FindStringSubmatch(filename)
+
+	// Set table name to the first capture match if table name is empty
+	if tableName == "" {
+		tableName = capturedMatches[0]
+	}
+
+	// Set table order to second captured match if it isn't empty.
+	if capturedMatches[1] != "" {
+		value, _ := strconv.Atoi(capturedMatches[1]) // Safe to ignore error here.
+		tableOrder = value
+	}
+
 	// Get sql file content.
-	path := filepath.Join(seeder.dir, tableName+".sql")
-	queries, err := ioutil.ReadFile(path)
+	queries, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return err
 	}
@@ -68,21 +88,19 @@ func (seeder *Seeder) Add(tableName string) error {
 	queriesStr := string(queries)
 
 	// Create inserts from query string.
-	inserts, err := generateInsertsFromQueries(queriesStr, seeder.seedKeyNames, seeder.SeedKeyType)
+	inserts, err := generateInsertsFromQueries(queriesStr, seeder.seedKeyNames, seeder.SeedKeyType, tableOrder)
 	if err != nil {
 		return err
 	}
 
 	// Insert values in pgseeder_seeds table
-	_, err = seeder.Model(&inserts).Insert()
-	if err != nil {
+	if _, err = seeder.Model(&inserts).Insert(); err != nil {
 		return err
 	}
 
 	if err := seeder.RunInTransaction(seeder.Context(), func(tx *pg.Tx) error {
 		// Run sql queries.
-		_, err = tx.Exec(queriesStr)
-		if err != nil {
+		if _, err = tx.Exec(queriesStr); err != nil {
 			return err
 		}
 
@@ -143,13 +161,15 @@ func (seeder *Seeder) AddAll() error {
 		return err
 	}
 
-	files, err := getAllSQLFilesWithoutExt(seeder.dir)
+	files, err := getAllSQLFilesSorted(seeder.dir)
 	if err != nil {
 		return err
 	}
 
 	for _, file := range files {
-		seeder.Add(file)
+		if err = seeder.Add(file, ""); err != nil {
+			return err
+		}
 	}
 
 	return nil

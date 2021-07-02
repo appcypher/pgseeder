@@ -39,32 +39,28 @@ func createSeedsTable(db *pg.DB) error {
 }
 
 // getAllSQLFilesWithoutExt gets all files in a directory
-func getAllSQLFilesWithoutExt(dir string) ([]string, error) {
+func getAllSQLFilesSorted(dir string) ([]string, error) {
 	var files []string
 
-	fileInfos, err := ioutil.ReadDir(dir)
+	fileInfos, err := ioutil.ReadDir(dir) // Will be sorted by filenames.
 	if err != nil {
-		return files, err
+		return files, fmt.Errorf("unable to get all files: %v", err)
 	}
 
 	for _, fileInfo := range fileInfos {
 		if filepath.Ext(fileInfo.Name()) == ".sql" {
-			files = append(files, strings.TrimSuffix(fileInfo.Name(), ".sql"))
+			files = append(files, fileInfo.Name())
 		}
-	}
-
-	if err != nil {
-		return []string{}, fmt.Errorf("unable to get all files: %v", err)
 	}
 
 	return files, nil
 }
 
 func formatDate(tm time.Time) string {
-	return fmt.Sprintf("%d/%d/%d %d:%d:%d", tm.Year(), tm.Month(), tm.Day(), tm.Hour(), tm.Minute(), tm.Second())
+	return fmt.Sprintf("%d/%02d/%02d %02d:%02d:%02d", tm.Year(), tm.Month(), tm.Day(), tm.Hour(), tm.Minute(), tm.Second())
 }
 
-func generateInsertsFromQueries(queries string, seedKeyNames []string, seedKeyType SeedKeyType) ([]PgseederSeed, error) {
+func generateInsertsFromQueries(queries string, seedKeyNames []string, seedKeyType SeedKeyType, tableOrder int) ([]PgseederSeed, error) {
 	tree, err := pg_query.ParseToJSON(queries)
 	if err != nil {
 		panic(err)
@@ -78,6 +74,7 @@ func generateInsertsFromQueries(queries string, seedKeyNames []string, seedKeyTy
 		tableName := gjson.Get(statementStr, "relation.relname").String()
 		seed := PgseederSeed{
 			TableName: tableName,
+			TableOrder: tableOrder,
 		}
 		matchingKeyNameCount := 0
 
@@ -110,7 +107,8 @@ func generateInsertsFromQueries(queries string, seedKeyNames []string, seedKeyTy
 		// Check if insert statements
 		if len(seedKeyNames) != matchingKeyNameCount {
 			return make([]PgseederSeed, 0), fmt.Errorf(
-				"insert statement primary keys don't match specified keys or the default \"id\"",
+				"%v: insert primary keys don't match specified keys or the default \"id\"",
+				tableName,
 			)
 		}
 
@@ -148,7 +146,7 @@ func constructDeleteSeedQuery(seed PgseederSeed) string {
 func getSeedsByDistinctTableNames(db *pg.DB) ([]PgseederSeed, error) {
 	var seeds []PgseederSeed
 
-	getSeedRecordsQuery := `SELECT DISTINCT table_name FROM pgseeder_seeds;`
+	getSeedRecordsQuery := `SELECT DISTINCT table_name, table_order FROM pgseeder_seeds ORDER BY table_order DESC;`
 	if _, err := db.Query(&seeds, getSeedRecordsQuery); err != nil {
 		return seeds, err
 	}

@@ -8,12 +8,13 @@ import (
 
 // PgseederSeed is the pgseeder_seeds table model.
 type PgseederSeed struct {
-	ID        uuid.UUID `pg:",pk, unique, notnull, type:uuid, default:uuid_generate_v4()"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	DeletedAt *time.Time
-	SeedKeys  []SeedKey `pg:"seed_keys"`
-	TableName string
+	ID         uuid.UUID `pg:",pk, unique, notnull, type:uuid, default:uuid_generate_v4()"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	DeletedAt  *time.Time
+	SeedKeys   []SeedKey `pg:"seed_keys"`
+	TableName  string
+	TableOrder int
 }
 
 // SeedKey represnts primary/composite key info of a seed.
